@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 clack-host = { git = "https://github.com/prokopyl/clack.git", version = "0.1.0" }
 dioxus = { version = "0.7.1", features = [] }
+shellexpand = "3.1.1"
 
 [features]
 default = ["desktop"]
