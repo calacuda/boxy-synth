@@ -79,6 +79,8 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
             let mut audio_processor = audio_processor.start_processing().unwrap();
             println!("after start_processing");
 
+            // TODO: output to Jack
+
             loop {
                 let input_events = InputEvents::from_buffer(&input_events_buffer);
                 let mut output_events = OutputEvents::from_buffer(&mut output_events_buffer);
