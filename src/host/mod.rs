@@ -63,49 +63,72 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
     let input_events_buffer: Vec<&UnknownEvent> = Vec::new();
     let mut output_events_buffer = EventBuffer::new();
 
-    let mut input_audio_buffers = [[0.0f32; 4]; 2]; // 2 channels (stereo), 1 port
-    let mut output_audio_buffers = [[0.0f32; 4]; 2];
+    println!("before input audio buffer");
+    // let mut input_audio_buffers = [[0.0f32; 4]; 0]; // 2 channels (stereo), 1 port
+    let mut output_audio_buffers = [[0.0f32; 4]; 1];
+    println!("after audio buffer");
 
-    let mut input_ports = AudioPorts::with_capacity(2, 1); // 2 channels (stereo), 1 port
-    let mut output_ports = AudioPorts::with_capacity(2, 1);
+    // let mut input_ports = AudioPorts::with_capacity(0, 0); // 2 channels (stereo), 1 port
+    let mut output_ports = AudioPorts::with_capacity(1, 1);
+    println!("after ports");
 
     // Let's send the audio processor to a dedicated audio processing thread.
     let audio_processor = std::thread::scope(|s| {
         s.spawn(|| {
+            println!("before start_processing");
             let mut audio_processor = audio_processor.start_processing().unwrap();
+            println!("after start_processing");
 
-            let input_events = InputEvents::from_buffer(&input_events_buffer);
-            let mut output_events = OutputEvents::from_buffer(&mut output_events_buffer);
+            loop {
+                let input_events = InputEvents::from_buffer(&input_events_buffer);
+                let mut output_events = OutputEvents::from_buffer(&mut output_events_buffer);
 
-            let mut input_audio = input_ports.with_input_buffers([AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_input_only(
-                    input_audio_buffers
-                        .iter_mut()
-                        .map(|b| InputChannel::constant(b)),
-                ),
-            }]);
+                // let mut input_audio = input_ports.with_input_buffers([AudioPortBuffer {
+                //     latency: 0,
+                //     channels: AudioPortBufferType::f32_input_only(
+                //         input_audio_buffers
+                //             .iter_mut()
+                //             .map(|b| InputChannel::constant(b)),
+                //     ),
+                // }]);
 
-            let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_output_only(
-                    output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
-                ),
-            }]);
+                let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+                    latency: 0,
+                    channels: AudioPortBufferType::f32_output_only(
+                        output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
+                    ),
+                }]);
 
-            // Finally do the processing itself.
-            let status = audio_processor
-                .process(
-                    &input_audio,
-                    &mut output_audio,
-                    &input_events,
-                    &mut output_events,
-                    None,
-                    None,
-                )
-                .unwrap();
+                // println!("before processor.process");
 
-            // Send the audio processor back to be deallocated by the main thread.
+                // Finally do the processing itself.
+                let status = audio_processor
+                    .process(
+                        &InputAudioBuffers::empty(),
+                        &mut output_audio,
+                        &input_events,
+                        &mut output_events,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+
+                // println!("after processor.process");
+
+                if status == clack_host::process::ProcessStatus::ContinueIfNotQuiet
+                    && output_audio
+                        .as_raw_buffers()
+                        .iter()
+                        .map(|buffer| unsafe { **buffer.data32 })
+                        .sum::<f32>()
+                        < 0.000001
+                {
+                    break;
+                }
+
+                // Send the audio processor back to be deallocated by the main thread.
+            }
+
             audio_processor.stop_processing()
         })
         .join()
