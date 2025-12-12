@@ -1,6 +1,6 @@
+use clack_extensions::params::PluginParams;
 use clack_host::events::event_types::*;
 use clack_host::prelude::*;
-use clap_sys::events::clap_event_header;
 use jack::{AudioOut, MidiIn};
 use std::io;
 use std::path::PathBuf;
@@ -24,28 +24,49 @@ impl<'a> SharedHandler<'a> for PluginHostShared {
     }
 }
 
+struct MyHostMainThread<'a> {
+    shared: &'a PluginHostShared,
+    instance: Option<InitializedPluginHandle<'a>>,
+    // The latency that is sent to us by the plugin's Latency extension.
+    // latency_changed: bool
+}
+
+impl<'a> MainThreadHandler<'a> for MyHostMainThread<'a> {
+    // The plugin's instance handle is required to call extension methods.
+    fn initialized(&mut self, instance: InitializedPluginHandle<'a>) {
+        self.instance = Some(instance);
+    }
+}
+
+// impl<'a> HostLatencyImpl for MyHostMainThread<'a> {
+//     // This method is called by the plugin whenever its latency changed.
+//     fn changed(&mut self) {
+//         // Ensure that the plugin is instantiated and supports the Latency extension.
+//         if let Some(Some(_latency)) = self.shared.latency_extension.get() {
+//             self.latency_changed = true
+//         }
+//     }
+// }
+
 struct PluginHost;
 
 impl HostHandlers for PluginHost {
     type Shared<'a> = PluginHostShared;
 
-    type MainThread<'a> = ();
+    type MainThread<'a> = (); // MyHostMainThread<'a>;
     type AudioProcessor<'a> = ();
 }
 
 pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
     // Information about our totally legit host.
     let host_info = HostInfo::new("Boxy-Synth", "", "", "Number")?;
-
     let bundle =
         unsafe { PluginBundle::load(shellexpand::tilde("~/.clap/Wt Synth.clap").to_string())? };
     let plugin_factory = bundle.get_plugin_factory().unwrap();
-
     let plugin_descriptor = plugin_factory
         .plugin_descriptors()
         .find(|d| d.id().unwrap().to_bytes() == b"online.eoghan-west.wt-synth")
         .unwrap();
-
     let mut plugin_instance = PluginInstance::<PluginHost>::new(
         |_| PluginHostShared,
         |_| (),
@@ -53,32 +74,20 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
         plugin_descriptor.id().unwrap(),
         &host_info,
     )?;
-
     let audio_configuration = PluginAudioConfiguration {
         sample_rate: 48_000.0,
         min_frames_count: 4,
         max_frames_count: 4,
     };
     let audio_processor = plugin_instance.activate(|_, _| (), audio_configuration)?;
-
-    // let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 12u16, 60u32), 4.2);
-    // let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 48u16, 60u32), 126.0);
-    // let input_events_buffer = [note_on_event];
-
     let mut output_ports = AudioPorts::with_capacity(1, 1);
-    println!("after ports");
-
-    println!("before start_processing");
     let mut audio_processor = audio_processor.start_processing().unwrap();
-    println!("after start_processing");
-
-    // TODO: output to Jack
 
     // Create client
     let (client, _status) = jack::Client::new("WT Synth", jack::ClientOptions::default())
         .expect("failed to build client");
 
-    println!("client made");
+    // println!("client made");
 
     let mut out_port = client
         .register_port("Mono", AudioOut::default())
@@ -87,29 +96,6 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
     let midi_in_port = client
         .register_port("MidiIn", MidiIn::default())
         .expect("failed to register midi input port");
-
-    // let input_events = InputEvents::from_buffer(&input_events_buffer);
-    // let mut output_audio_buffers = [[0.0f32; 1024]; 1];
-    // let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-    //     latency: 0,
-    //     channels: AudioPortBufferType::f32_output_only(
-    //         output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
-    //     ),
-    // }]);
-    //
-    // audio_processor
-    //     .process(
-    //         &InputAudioBuffers::empty(),
-    //         // &mut OutputAudioBuffers::empty(),
-    //         &mut output_audio,
-    //         &input_events,
-    //         &mut OutputEvents::void(),
-    //         None,
-    //         None,
-    //     )
-    //     .unwrap();
-    //
-    // let input_events_buffer: Vec<&UnknownEvent> = Vec::new();
 
     let cback = move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
         let show_p = midi_in_port.iter(ps);
