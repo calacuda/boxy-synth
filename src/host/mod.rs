@@ -1,6 +1,9 @@
 use clack_host::events::event_types::*;
 use clack_host::prelude::*;
+use jack::{AudioOut, MidiIn};
+use std::io;
 use std::path::PathBuf;
+use std::thread::spawn;
 
 pub fn list_plugins() -> Vec<(String, PathBuf)> {
     Vec::new()
@@ -58,85 +61,120 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
     let audio_processor = plugin_instance.activate(|_, _| (), audio_configuration)?;
 
     // let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 12u16, 60u32), 4.2);
-    // let input_events_buffer = [note_on_event];
-    // let input_events_buffer: [InputEvents; 0] = [];
-    let input_events_buffer: Vec<&UnknownEvent> = Vec::new();
-    let mut output_events_buffer = EventBuffer::new();
+    let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 48u16, 60u32), 126.0);
+    let input_events_buffer = [note_on_event];
 
-    println!("before input audio buffer");
-    // let mut input_audio_buffers = [[0.0f32; 4]; 0]; // 2 channels (stereo), 1 port
-    let mut output_audio_buffers = [[0.0f32; 4]; 1];
-    println!("after audio buffer");
-
-    // let mut input_ports = AudioPorts::with_capacity(0, 0); // 2 channels (stereo), 1 port
     let mut output_ports = AudioPorts::with_capacity(1, 1);
     println!("after ports");
 
-    // Let's send the audio processor to a dedicated audio processing thread.
-    let audio_processor = std::thread::scope(|s| {
-        s.spawn(|| {
-            println!("before start_processing");
-            let mut audio_processor = audio_processor.start_processing().unwrap();
-            println!("after start_processing");
+    println!("before start_processing");
+    let mut audio_processor = audio_processor.start_processing().unwrap();
+    println!("after start_processing");
 
-            // TODO: output to Jack
+    // TODO: output to Jack
 
-            loop {
-                let input_events = InputEvents::from_buffer(&input_events_buffer);
-                let mut output_events = OutputEvents::from_buffer(&mut output_events_buffer);
+    // Create client
+    let (client, _status) = jack::Client::new("WT Synth", jack::ClientOptions::default())
+        .expect("failed to build client");
 
-                // let mut input_audio = input_ports.with_input_buffers([AudioPortBuffer {
-                //     latency: 0,
-                //     channels: AudioPortBufferType::f32_input_only(
-                //         input_audio_buffers
-                //             .iter_mut()
-                //             .map(|b| InputChannel::constant(b)),
-                //     ),
-                // }]);
+    println!("client made");
 
-                let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-                    latency: 0,
-                    channels: AudioPortBufferType::f32_output_only(
-                        output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
-                    ),
-                }]);
+    let mut out_port = client
+        .register_port("Mono", AudioOut::default())
+        .expect("failed to register audio out port");
 
-                // println!("before processor.process");
+    let mut midi_in_port = client
+        .register_port("MidiIn", MidiIn::default())
+        .expect("failed to register midi input port");
 
-                // Finally do the processing itself.
-                let status = audio_processor
-                    .process(
-                        &InputAudioBuffers::empty(),
-                        &mut output_audio,
-                        &input_events,
-                        &mut output_events,
-                        None,
-                        None,
-                    )
-                    .unwrap();
+    let input_events = InputEvents::from_buffer(&input_events_buffer);
+    let mut output_audio_buffers = [[0.0f32; 1024]; 1];
+    let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+        latency: 0,
+        channels: AudioPortBufferType::f32_output_only(
+            output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
+        ),
+    }]);
 
-                // println!("after processor.process");
+    audio_processor
+        .process(
+            &InputAudioBuffers::empty(),
+            // &mut OutputAudioBuffers::empty(),
+            &mut output_audio,
+            &input_events,
+            &mut OutputEvents::void(),
+            None,
+            None,
+        )
+        .unwrap();
 
-                if status == clack_host::process::ProcessStatus::ContinueIfNotQuiet
-                    && output_audio
-                        .as_raw_buffers()
-                        .iter()
-                        .map(|buffer| unsafe { **buffer.data32 })
-                        .sum::<f32>()
-                        < 0.000001
-                {
-                    break;
-                }
+    let input_events_buffer: Vec<&UnknownEvent> = Vec::new();
 
-                // Send the audio processor back to be deallocated by the main thread.
-            }
+    let cback = move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
+        // let mut put_p = maker.writer(ps);
+        // put_p
+        //     .write(&jack::RawMidi {
+        //         time: 0,
+        //         bytes: &[
+        //             0b10010000, /* Note On, channel 1 */
+        //             0b01000000, /* Key number */
+        //             0b01111111, /* Velocity */
+        //         ],
+        //     })
+        //     .unwrap();
 
-            audio_processor.stop_processing()
-        })
-        .join()
-        .unwrap()
+        let writer = out_port.as_mut_slice(ps);
+        let input_events = InputEvents::from_buffer(&input_events_buffer);
+        let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+            latency: 0,
+            channels: AudioPortBufferType::f32_output_only([writer.iter_mut().into_slice()]),
+        }]);
+
+        // Finally do the processing itself.
+        let status = audio_processor
+            .process(
+                &InputAudioBuffers::empty(),
+                &mut output_audio,
+                &input_events,
+                &mut OutputEvents::void(),
+                None,
+                None,
+            )
+            .unwrap();
+
+        if status == clack_host::process::ProcessStatus::ContinueIfNotQuiet
+            && output_audio
+                .as_raw_buffers()
+                .iter()
+                .map(|buffer| unsafe { **buffer.data32 })
+                .sum::<f32>()
+                < 0.000001
+        {
+            jack::Control::Quit
+        } else {
+            jack::Control::Continue
+        }
+    };
+
+    let active_client = spawn(|| {
+        client
+            .activate_async((), jack::contrib::ClosureProcessHandler::new(cback))
+            .expect("failed to activate_async")
     });
 
-    plugin_instance.deactivate(audio_processor);
+    // sleep(Duration::from_secs(10));
+
+    let mut user_input = String::new();
+    io::stdin()
+        .read_line(&mut user_input)
+        .expect("problem waiting");
+
+    // Optional deactivation.
+    if let Err(err) = active_client.join().expect("failed to join").deactivate() {
+        eprintln!("JACK exited with error: {err}");
+    } else {
+        println!("JACK deactivated successfully");
+    };
+
     Ok(())
 }

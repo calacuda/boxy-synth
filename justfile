@@ -48,5 +48,8 @@ commit-all message:
     git commit -am "{{message}}"
     git push
 
-run:
+serve:
   WEBKIT_DISABLE_COMPOSITING_MODE=1 dx serve --platform desktop
+
+build:
+  WEBKIT_DISABLE_COMPOSITING_MODE=1 dx build -r --platform desktop
