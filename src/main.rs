@@ -10,7 +10,9 @@ const HEADER_SVG: Asset = asset!("/assets/header.svg");
 
 fn main() {
     let _jh = spawn(|| {
-        load_and_process();
+        if let Err(e) = load_and_process() {
+            error!("{e}");
+        }
     });
 
     dioxus::launch(App);
