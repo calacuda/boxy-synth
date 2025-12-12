@@ -1,5 +1,6 @@
 use clack_host::events::event_types::*;
 use clack_host::prelude::*;
+use clap_sys::events::clap_event_header;
 use jack::{AudioOut, MidiIn};
 use std::io;
 use std::path::PathBuf;
@@ -61,8 +62,8 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
     let audio_processor = plugin_instance.activate(|_, _| (), audio_configuration)?;
 
     // let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 12u16, 60u32), 4.2);
-    let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 48u16, 60u32), 126.0);
-    let input_events_buffer = [note_on_event];
+    // let note_on_event = NoteOnEvent::new(0, Pckn::new(0u16, 0u16, 48u16, 60u32), 126.0);
+    // let input_events_buffer = [note_on_event];
 
     let mut output_ports = AudioPorts::with_capacity(1, 1);
     println!("after ports");
@@ -83,45 +84,59 @@ pub fn load_and_process() -> Result<(), Box<dyn std::error::Error>> {
         .register_port("Mono", AudioOut::default())
         .expect("failed to register audio out port");
 
-    let mut midi_in_port = client
+    let midi_in_port = client
         .register_port("MidiIn", MidiIn::default())
         .expect("failed to register midi input port");
 
-    let input_events = InputEvents::from_buffer(&input_events_buffer);
-    let mut output_audio_buffers = [[0.0f32; 1024]; 1];
-    let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
-        latency: 0,
-        channels: AudioPortBufferType::f32_output_only(
-            output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
-        ),
-    }]);
-
-    audio_processor
-        .process(
-            &InputAudioBuffers::empty(),
-            // &mut OutputAudioBuffers::empty(),
-            &mut output_audio,
-            &input_events,
-            &mut OutputEvents::void(),
-            None,
-            None,
-        )
-        .unwrap();
-
-    let input_events_buffer: Vec<&UnknownEvent> = Vec::new();
+    // let input_events = InputEvents::from_buffer(&input_events_buffer);
+    // let mut output_audio_buffers = [[0.0f32; 1024]; 1];
+    // let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+    //     latency: 0,
+    //     channels: AudioPortBufferType::f32_output_only(
+    //         output_audio_buffers.iter_mut().map(|b| b.as_mut_slice()),
+    //     ),
+    // }]);
+    //
+    // audio_processor
+    //     .process(
+    //         &InputAudioBuffers::empty(),
+    //         // &mut OutputAudioBuffers::empty(),
+    //         &mut output_audio,
+    //         &input_events,
+    //         &mut OutputEvents::void(),
+    //         None,
+    //         None,
+    //     )
+    //     .unwrap();
+    //
+    // let input_events_buffer: Vec<&UnknownEvent> = Vec::new();
 
     let cback = move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
-        // let mut put_p = maker.writer(ps);
-        // put_p
-        //     .write(&jack::RawMidi {
-        //         time: 0,
-        //         bytes: &[
-        //             0b10010000, /* Note On, channel 1 */
-        //             0b01000000, /* Key number */
-        //             0b01111111, /* Velocity */
-        //         ],
-        //     })
-        //     .unwrap();
+        let show_p = midi_in_port.iter(ps);
+        let mut input_events_buffer = EventBuffer::new();
+
+        for e in show_p {
+            let time = e.time;
+
+            if e.bytes.len() == 3 {
+                input_events_buffer.push(&MidiEvent::new(
+                    time,
+                    0,
+                    [e.bytes[0], e.bytes[1], e.bytes[2]],
+                ));
+            } else {
+                input_events_buffer.push(&Midi2Event::new(
+                    time,
+                    0,
+                    [
+                        e.bytes[0].into(),
+                        e.bytes[1].into(),
+                        e.bytes[2].into(),
+                        e.bytes[3].into(),
+                    ],
+                ));
+            }
+        }
 
         let writer = out_port.as_mut_slice(ps);
         let input_events = InputEvents::from_buffer(&input_events_buffer);
